@@ -1,0 +1,92 @@
+/* General Styles */
+body {
+    font-family: 'Segoe UI', sans-serif;
+    background-color: #f4f4f4;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    margin: 0;
+  }
+  
+  .game-container {
+    max-width: 600px;
+    text-align: center;
+  }
+  
+  /* Header and Scoreboard */
+  header {
+    margin-bottom: 20px;
+  }
+  
+  .scoreboard {
+    font-size: 1.2em;
+    display: flex;
+    justify-content: space-between;
+    margin: 10px 0;
+  }
+  
+  /* Game Board Layout */
+  .game-board {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    justify-items: center;
+    margin: 0 auto;
+    padding: 10px;
+  }
+  
+  /* Card Styles */
+  .card {
+    width: 100px;
+    height: 100px;
+    perspective: 1000px;
+  }
+  
+  .card-inner {
+    width: 100%;
+    height: 100%;
+    position: relative;
+    transform-style: preserve-3d;
+    transition: transform 0.6s;
+  }
+  
+  .card.flipped .card-inner {
+    transform: rotateY(180deg); /* Triggers front to show */
+  }
+  
+  .card .front,
+  .card .back {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    backface-visibility: hidden;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 2em;
+  }
+  
+  /* Card Faces */
+  .front {
+    background: #fff;
+    border: 2px solid #ddd;
+    transform: rotateY(180deg); /* Flip front by default */
+  }
+  
+  .back {
+    background: #e0e0e0;
+    transform: rotateY(0); /* Show back by default */
+  }
+  
+  /* Win Message */
+  .win-message {
+    margin-top: 20px;
+  }
+  
+  /* Hidden Utility */
+  .hidden {
+    display: none;
+  }
+  
