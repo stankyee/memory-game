@@ -1,146 +1,354 @@
-const board = document.getElementById("game-board");
-const winMessage = document.getElementById("win-message");
-const movesEl = document.getElementById("moves");
-const timerEl = document.getElementById("timer");
+const socket = io();
 
-let flippedCards = [];
-let matchedCount = 0;
-let moves = 0;
-let seconds = 0;
-let isTiming = false;
-let timer;
-let totalPairs = 8; // default for medium
+const playerBoard = document.getElementById("player-board");
+const enemyBoard = document.getElementById("enemy-board");
+const rotateButton = document.getElementById("rotate-btn");
+const startButton = document.getElementById("start-btn");
+const statusText = document.getElementById("status");
 
-const icons = [
-  { icon: "fa-star", color: "#FFD700" },
-  { icon: "fa-heart", color: "#FF4C4C" },
-  { icon: "fa-moon", color: "#B0C4DE" },
-  { icon: "fa-sun", color: "#FFA500" },
-  { icon: "fa-leaf", color: "#32CD32" },
-  { icon: "fa-snowflake", color: "#00BFFF" },
-  { icon: "fa-bolt", color: "#FFD700" },
-  { icon: "fa-gem", color: "#8A2BE2" },
-  { icon: "fa-ghost", color: "#999" },
-  { icon: "fa-fish", color: "#1E90FF" },
-  { icon: "fa-apple-alt", color: "#DC143C" },
-  { icon: "fa-feather", color: "#D2691E" },
-  { icon: "fa-anchor", color: "#4682B4" },
-  { icon: "fa-cube", color: "#6A5ACD" }
-];
+// Create Play Again button dynamically
+const playAgainBtn = document.createElement("button");
+playAgainBtn.textContent = "Play Again";
+playAgainBtn.style.display = "none";
+playAgainBtn.style.position = "fixed";
+playAgainBtn.style.top = "60%";
+playAgainBtn.style.left = "50%";
+playAgainBtn.style.transform = "translate(-50%, -50%)";
+playAgainBtn.style.padding = "15px 30px";
+playAgainBtn.style.fontSize = "20px";
+playAgainBtn.style.cursor = "pointer";
+playAgainBtn.style.zIndex = "1001";
+document.body.appendChild(playAgainBtn);
 
-function startGame(difficulty = 'medium') {
-  board.innerHTML = '';
-  winMessage.classList.add('hidden');
-  flippedCards = [];
-  matchedCount = 0;
-  moves = 0;
-  seconds = 0;
-  isTiming = false;
-  clearInterval(timer);
-  movesEl.textContent = '0';
-  timerEl.textContent = '00:00';
+// Create overlay for win/loss message
+const overlay = document.createElement("div");
+overlay.style.position = "fixed";
+overlay.style.top = "0";
+overlay.style.left = "0";
+overlay.style.width = "100%";
+overlay.style.height = "100%";
+overlay.style.backgroundColor = "rgba(0, 0, 0, 0.7)";
+overlay.style.display = "none";
+overlay.style.zIndex = "1000";
+document.body.appendChild(overlay);
 
-  let numPairs;
-  switch (difficulty) {
-    case 'easy':
-      numPairs = 4;
-      board.style.gridTemplateColumns = 'repeat(4, 1fr)';
-      break;
-    case 'medium':
-      numPairs = 8;
-      board.style.gridTemplateColumns = 'repeat(4, 1fr)';
-      break;
-    case 'hard':
-      numPairs = 12;
-      board.style.gridTemplateColumns = 'repeat(6, 1fr)';
-      break;
+let totalShipCells = 0;
+let playerHits = 0;
+let enemyHits = 0;
+let playerCells = [];
+let enemyCells = [];
+let currentShip = null;
+let currentShipLength = 0;
+let currentOrientation = "horizontal";
+let placedShips = 0;
+let isPlayerTurn = false;
+let gameStarted = false;
+let shipDragOffset = 0;
+
+// === Board Creation ===
+function createBoard(container, cellsArray, isEnemy = false) {
+  container.innerHTML = "";
+  cellsArray.length = 0;
+
+  for (let i = 0; i < 100; i++) {
+    const cell = document.createElement("div");
+    cell.classList.add("cell");
+    cell.dataset.index = i;
+
+    if (!isEnemy) {
+      cell.addEventListener("dragover", e => {
+        e.preventDefault();
+        if (currentShip) {
+          highlightPreview(cell, cellsArray, currentShipLength, currentOrientation);
+        }
+      });
+
+      cell.addEventListener("dragleave", () => {
+        clearPreview(cellsArray);
+      });
+
+      cell.addEventListener("drop", e => {
+        e.preventDefault();
+        clearPreview(cellsArray);
+        placeShip(parseInt(cell.dataset.index));
+      });
+    }
+
+    container.appendChild(cell);
+    cellsArray.push(cell);
+  }
+}
+
+// === Ship Placement ===
+function placeShip(startIdx) {
+  if (!currentShip) return;
+
+  const length = currentShipLength;
+  const indices = [];
+
+  startIdx = currentOrientation === "horizontal"
+    ? startIdx - shipDragOffset
+    : startIdx - shipDragOffset * 10;
+
+  for (let i = 0; i < length; i++) {
+    let idx = currentOrientation === "horizontal"
+      ? startIdx + i
+      : startIdx + i * 10;
+
+    if (!playerCells[idx]) return;
+
+    const rowStart = Math.floor(startIdx / 10);
+    const rowIdx = Math.floor(idx / 10);
+
+    if (
+      playerCells[idx].classList.contains("ship") ||
+      (currentOrientation === "horizontal" && rowStart !== rowIdx)
+    ) {
+      return;
+    }
+
+    indices.push(idx);
   }
 
-  totalPairs = numPairs;
+  indices.forEach(idx => {
+    playerCells[idx].classList.add("ship");
+  });
 
-  const selectedIcons = shuffle(icons).slice(0, numPairs);
-  const iconPairs = [...selectedIcons, ...selectedIcons].map(obj => ({ ...obj }));
-  const gameIcons = shuffle(iconPairs);
+  currentShip.remove();
+  currentShip = null;
+  currentShipLength = 0;
+  placedShips++;
 
-  gameIcons.forEach(({ icon, color }) => {
-    board.appendChild(createCard(icon, color));
+  if (placedShips === 5) {
+    startButton.disabled = false;
+    statusText.textContent = "Waiting for opponent...";
+    socket.emit("ready");
+  }
+
+  totalShipCells += indices.length;
+}
+
+function highlightPreview(cell, boardCells, length, orientation) {
+  clearPreview(boardCells);
+  let startIdx = parseInt(cell.dataset.index);
+
+  startIdx = orientation === "horizontal"
+    ? startIdx - shipDragOffset
+    : startIdx - shipDragOffset * 10;
+
+  const previewCells = [];
+
+  for (let i = 0; i < length; i++) {
+    let idx = orientation === "horizontal"
+      ? startIdx + i
+      : startIdx + i * 10;
+
+    const testCell = boardCells[idx];
+    if (!testCell) return;
+
+    if (orientation === "horizontal" &&
+        Math.floor(idx / 10) !== Math.floor(startIdx / 10)) {
+      return;
+    }
+
+    previewCells.push(testCell);
+  }
+
+  previewCells.forEach(cell => cell.classList.add("preview"));
+}
+
+function clearPreview(boardCells) {
+  boardCells.forEach(cell => cell.classList.remove("preview"));
+}
+
+// === Rotation ===
+rotateButton.addEventListener("click", () => {
+  currentOrientation = currentOrientation === "horizontal" ? "vertical" : "horizontal";
+  rotateButton.textContent = `Rotate (${currentOrientation.charAt(0).toUpperCase()}${currentOrientation.slice(1)})`;
+
+  document.querySelectorAll(".ship").forEach(ship => {
+    ship.setAttribute("data-orientation", currentOrientation);
+  });
+});
+
+// === Game Start ===
+startButton.addEventListener("click", () => {
+  if (!startButton.disabled) {
+    socket.emit("start", { yourTurn: true });
+    gameStarted = true;
+    statusText.textContent = "Your turn!";
+    startButton.disabled = true;
+  }
+});
+
+// === Game Logic ===
+enemyBoard.addEventListener("click", e => {
+  if (!isPlayerTurn || !gameStarted) return;
+
+  const cell = e.target;
+  if (!cell.classList.contains("cell") || cell.classList.contains("hit") || cell.classList.contains("miss")) return;
+
+  socket.emit("move", { index: parseInt(cell.dataset.index) });
+  isPlayerTurn = false;
+  statusText.textContent = "Waiting for opponent...";
+});
+
+socket.on("start", data => {
+  isPlayerTurn = data.yourTurn;
+  gameStarted = true;
+  statusText.textContent = isPlayerTurn ? "Your turn!" : "Opponent's turn";
+});
+
+socket.on("player-ready", () => {
+  if (placedShips === 5) {
+    socket.emit("start", { yourTurn: true });
+  }
+});
+
+socket.on("move", data => {
+  const cell = playerCells[data.index];
+  const isHit = cell.classList.contains("ship");
+
+  if (isHit) {
+    cell.classList.add("hit");
+    enemyHits++;
+    if (enemyHits === totalShipCells) {
+      socket.emit("game-over");
+      showEndMessage("You lost!");
+    }
+  } else {
+    cell.classList.add("miss");
+  }
+
+  socket.emit("move-result", {
+    index: data.index,
+    result: isHit ? "hit" : "miss"
+  });
+
+  if (enemyHits < totalShipCells) {
+    isPlayerTurn = true;
+    statusText.textContent = "Your turn!";
+  }
+});
+
+socket.on("move-result", data => {
+  const cell = enemyCells[data.index];
+  cell.classList.add(data.result);
+
+  if (data.result === "hit") {
+    playerHits++;
+    if (playerHits === totalShipCells) {
+      socket.emit("game-over");
+      showEndMessage("You win!");
+      gameStarted = false;
+      return;
+    }
+  }
+
+  isPlayerTurn = false;
+  statusText.textContent = "Opponent's turn";
+});
+
+socket.on("game-over", () => {
+  if (playerHits < totalShipCells) {
+    showEndMessage("You lost!");
+  } else {
+    showEndMessage("You win!");
+  }
+  gameStarted = false;
+});
+
+// === Play Again ===
+playAgainBtn.addEventListener("click", () => {
+  socket.emit("reset");
+  resetGame();
+});
+
+socket.on("game-reset", () => {
+  resetGame();
+});
+
+// === Game Reset & Helpers ===
+function resetGame() {
+  resetGameState();
+  resetUI();
+  initializeShips();
+  createBoard(playerBoard, playerCells);
+  createBoard(enemyBoard, enemyCells, true);
+}
+
+function resetGameState() {
+  placedShips = 0;
+  totalShipCells = 0;
+  playerHits = 0;
+  enemyHits = 0;
+  isPlayerTurn = false;
+  gameStarted = false;
+  currentShip = null;
+  currentShipLength = 0;
+  shipDragOffset = 0;
+  startButton.disabled = true;
+}
+
+function resetUI() {
+  hideEndMessage();
+  statusText.textContent = "Place your ships...";
+  document.body.style.pointerEvents = "auto";
+  currentOrientation = "horizontal";
+  rotateButton.textContent = "Rotate (Horizontal)";
+}
+
+function initializeShips() {
+  const shipsContainer = document.getElementById("ships");
+
+  shipsContainer.innerHTML = `
+    <div class="ship-wrapper"><div class="ship" draggable="true" data-length="5" data-orientation="horizontal"></div></div>
+    <div class="ship-wrapper"><div class="ship" draggable="true" data-length="4" data-orientation="horizontal"></div></div>
+    <div class="ship-wrapper"><div class="ship" draggable="true" data-length="3" data-orientation="horizontal"></div></div>
+    <div class="ship-wrapper"><div class="ship" draggable="true" data-length="3" data-orientation="horizontal"></div></div>
+    <div class="ship-wrapper"><div class="ship" draggable="true" data-length="2" data-orientation="horizontal"></div></div>
+  `;
+
+  document.querySelectorAll(".ship").forEach(ship => {
+    ship.addEventListener("dragstart", e => {
+      currentShip = ship;
+      currentShipLength = parseInt(ship.dataset.length);
+
+      const rect = ship.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      shipDragOffset = currentOrientation === "horizontal"
+        ? Math.floor(x / 30)
+        : Math.floor(y / 30);
+    });
   });
 }
 
-function createCard(icon, color) {
-  const card = document.createElement('div');
-  card.classList.add('card');
-
-  const inner = document.createElement('div');
-  inner.classList.add('card-inner');
-
-  const front = document.createElement('div');
-  front.classList.add('front');
-  front.innerHTML = `<i class="fas ${icon}" style="color: ${color}; font-size: 24px;"></i>`;
-
-  const back = document.createElement('div');
-  back.classList.add('back');
-
-  inner.appendChild(front);
-  inner.appendChild(back);
-  card.appendChild(inner);
-
-  card.addEventListener('click', () => handleFlip(card, icon));
-
-  return card;
+function showEndMessage(message) {
+  statusText.textContent = message;
+  overlay.style.display = "block";
+  playAgainBtn.style.display = "block";
+  document.body.style.pointerEvents = "none";
+  overlay.style.pointerEvents = "auto";
+  playAgainBtn.style.pointerEvents = "auto";
+  statusText.style.position = "fixed";
+  statusText.style.top = "50%";
+  statusText.style.left = "50%";
+  statusText.style.transform = "translate(-50%, -50%)";
+  statusText.style.fontSize = "48px";
+  statusText.style.color = "white";
+  statusText.style.zIndex = "1002";
 }
 
-function handleFlip(card, icon) {
-  if (card.classList.contains("flipped") || flippedCards.length === 2) return;
-
-  if (!isTiming) {
-    isTiming = true;
-    timer = setInterval(updateTimer, 1000);
-  }
-
-  card.classList.add("flipped");
-  flippedCards.push({ card, icon });
-
-  if (flippedCards.length === 2) {
-    moves++;
-    movesEl.textContent = moves;
-    const [first, second] = flippedCards;
-
-    if (first.icon === second.icon) {
-      matchedCount++;
-      flippedCards = [];
-
-      if (matchedCount === totalPairs) {
-        clearInterval(timer);
-        // Update the win message with final moves and time
-        document.getElementById("final-moves").textContent = moves;
-        document.getElementById("final-time").textContent = timerEl.textContent;
-        winMessage.classList.remove("hidden");
-      }
-    } else {
-      setTimeout(() => {
-        first.card.classList.remove("flipped");
-        second.card.classList.remove("flipped");
-        flippedCards = [];
-      }, 1000);
-    }
-  }
+function hideEndMessage() {
+  overlay.style.display = "none";
+  playAgainBtn.style.display = "none";
+  statusText.style = "";
+  statusText.textContent = "Place your ships...";
 }
 
-function updateTimer() {
-  seconds++;
-  const mins = String(Math.floor(seconds / 60)).padStart(2, '0');
-  const secs = String(seconds % 60).padStart(2, '0');
-  timerEl.textContent = `${mins}:${secs}`;
-}
-
-function shuffle(array) {
-  let currentIndex = array.length, randomIndex;
-
-  while (currentIndex !== 0) {
-    randomIndex = Math.floor(Math.random() * currentIndex--);
-    [array[currentIndex], array[randomIndex]] = [array[randomIndex], array[currentIndex]];
-  }
-
-  return array;
-}
+// === Init ===
+initializeShips();
+createBoard(playerBoard, playerCells);
+createBoard(enemyBoard, enemyCells, true);
